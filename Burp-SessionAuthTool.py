@@ -6,11 +6,11 @@ from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue)
 from javax.swing import (JPanel, JTable, JButton, JTextField, JLabel, JScrollPane)
 from javax.swing.table import AbstractTableModel
 from java.awt import (GridBagLayout, GridBagConstraints)
-from java.util import ArrayList
+from array import array
 
 class BurpExtender(IBurpExtender, ITab, IScannerCheck):
     def registerExtenderCallbacks(self, callbacks):
-        self.burp = callbacks
+        self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
         callbacks.setExtensionName("Session Authentication Tool")
         self.out = callbacks.getStdout()
@@ -108,7 +108,8 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck):
                         param,
                         ident,
                         self.tabledata.getValue(ident),
-                        SessionAuthPassiveScanIssue.foundEqual
+                        SessionAuthPassiveScanIssue.foundEqual,
+                        self.callbacks
                         ))
                 elif value.find(ident) >= 0:
                     issues.append(SessionAuthPassiveScanIssue(
@@ -118,7 +119,8 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck):
                         param,
                         ident,
                         self.tabledata.getValue(ident),
-                        SessionAuthPassiveScanIssue.foundInside
+                        SessionAuthPassiveScanIssue.foundInside,
+                        self.callbacks
                         ))
         if len(issues) > 0:
             return issues
@@ -136,14 +138,39 @@ class SessionAuthPassiveScanIssue(IScanIssue):
     foundEqual = 1                        # parameter value equals identifier
     foundInside = 2                       # identifier was found inside parameter value
 
-    def __init__(self, service, url, httpmsgs, param, ident, value, foundtype):
+    def __init__(self, service, url, httpmsgs, param, ident, value, foundtype, callbacks):
+        self.callbacks = callbacks
         self.service = service
         self.findingurl = url
-        self.httpmsgs = [httpmsgs]
+        requestMatch = [array('i', [param.getValueStart(), param.getValueEnd()])]
+        responseMatches = self.findAll("".join(map(chr, httpmsgs.getResponse())), value)
+        self.httpmsgs = [callbacks.applyMarkers(httpmsgs, requestMatch, responseMatches)]
+        if responseMatches:
+            self.foundInResponse = True
+        else:
+            self.foundInResponse = False
         self.param = param
         self.ident = ident
         self.value = value
         self.foundtype = foundtype
+
+    def findAll(self, searchIn, searchVal):
+        found = list()
+        length = len(searchVal)
+        continueSearch = True
+        offset = 0
+        while continueSearch:
+            pos = searchIn.find(searchVal)
+            if pos >= 0:
+                found.append(array('i', [pos + offset, pos + length + offset]))
+                searchIn = searchIn[pos + length:]
+                offset = offset + pos + length
+            else:
+                continueSearch = False
+        if len(found) > 0:
+            return found
+        else:
+            return None
 
     def getUrl(self):
         return self.findingurl
@@ -165,7 +192,7 @@ class SessionAuthPassiveScanIssue(IScanIssue):
 
     def getIssueDetail(self):
         msg = "The parameter <b>" + self.param.getName() + "</b> contains the user identifier <b>" + self.param.getValue() + "</b>."
-        if "".join(map(chr, self.httpmsgs[0].getResponse())).find(self.value):
+        if self.foundInResponse:
             msg += "\nThe value <b>" + self.value + "</b> associated with the identifier was found in the response. The request is \
             probably suitable for active scan detection of privilege escalation vulnerabilities."
         return msg

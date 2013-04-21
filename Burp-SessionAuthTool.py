@@ -143,7 +143,7 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         self.service = service
         self.findingurl = url
         requestMatch = [array('i', [param.getValueStart(), param.getValueEnd()])]
-        responseMatches = self.findAll("".join(map(chr, httpmsgs.getResponse())), value)
+        responseMatches = self.findAll(httpmsgs.getResponse().tostring(), value)
         self.httpmsgs = [callbacks.applyMarkers(httpmsgs, requestMatch, responseMatches)]
         if responseMatches:
             self.foundInResponse = True

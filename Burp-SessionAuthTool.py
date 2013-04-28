@@ -2,13 +2,13 @@
 # detection of potential privilege escalation issues caused by
 # transmission of user identifiers from the client.
 
-from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue)
-from javax.swing import (JPanel, JTable, JButton, JTextField, JLabel, JScrollPane)
+from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue, IContextMenuFactory, IContextMenuInvocation)
+from javax.swing import (JPanel, JTable, JButton, JTextField, JLabel, JScrollPane, JMenuItem)
 from javax.swing.table import AbstractTableModel
 from java.awt import (GridBagLayout, GridBagConstraints)
 from array import array
 
-class BurpExtender(IBurpExtender, ITab, IScannerCheck):
+class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory):
     def registerExtenderCallbacks(self, callbacks):
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
@@ -70,6 +70,7 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck):
         callbacks.customizeUiComponent(self.input_id)
         callbacks.addSuiteTab(self)
         callbacks.registerScannerCheck(self)
+        callbacks.registerContextMenuFactory(self)
 
     def btn_add_id(self, e):
         ident = self.input_id.text
@@ -89,6 +90,39 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck):
 
     def getUiComponent(self):
         return self.tab
+
+    ### IContextMenuFactory ###
+    def createMenuItems(self, invocation):
+        msgs = invocation.getSelectedMessages()
+        if msgs == None or len(msgs) != 1:
+            return None
+        bounds = invocation.getSelectionBounds()
+        if bounds == None or bounds[0] == bounds[1]:
+            return None
+
+        msg = None
+        if invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_EDITOR_REQUEST or invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_VIEWER_REQUEST:
+            msg = msgs[0].getRequest().tostring()
+        if invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_EDITOR_RESPONSE or invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_VIEWER_RESPONSE:
+            msg = msgs[0].getResponse().tostring()
+        if msg == None:
+            return None
+
+        selection = msg[bounds[0]:bounds[1]]
+        menuitems = [JMenuItem("Add '" + selection + "' as object id", actionPerformed=self.gen_menu_add_id(selection))]
+        if self.tabledata.lastadded != None:
+            menuitems.append(JMenuItem("Add '" + selection + "' as content to last added id", actionPerformed=self.gen_menu_add_content(selection)))
+        return menuitems
+
+    def gen_menu_add_id(self, ident):
+        def menu_add_id(e):
+            self.tabledata.add_mapping(ident, "")
+        return menu_add_id
+
+    def gen_menu_add_content(self, content):
+        def menu_add_content(e):
+            self.tabledata.set_lastadded_content(content)
+        return menu_add_content
 
     ### IScannerCheck ###
     def doPassiveScan(self, baseRequestResponse):
@@ -222,6 +256,7 @@ class MappingTableModel(AbstractTableModel):
         self.columnnames = ["User/Object Identifier", "Content"]
         self.mappings = dict()
         self.idorder = list()
+        self.lastadded = None
 
     def getColumnCount(self):
         return len(self.columnnames)
@@ -251,13 +286,21 @@ class MappingTableModel(AbstractTableModel):
         if ident not in self.mappings:
             self.idorder.append(ident)
         self.mappings[ident] = content
+        self.lastadded = ident
+        self.fireTableDataChanged()
+
+    def set_lastadded_content(self, content):
+        self.mappings[self.lastadded] = content
         self.fireTableDataChanged()
 
     def del_rows(self, rows):
         rows.sort()
         deleted = 0
         for row in rows:
-            del self.mappings[self.idorder[row - deleted]]
+            delkey = self.idorder[row - deleted]
+            del self.mappings[delkey]
+            if delkey == self.lastadded:
+                self.lastadded = None
             if row - deleted > 0:
                 self.idorder = self.idorder[:row - deleted] + self.idorder[row + 1 - deleted:]
             else:

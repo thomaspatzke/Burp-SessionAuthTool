@@ -2,13 +2,13 @@
 # detection of potential privilege escalation issues caused by
 # transmission of user identifiers from the client.
 
-from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue, IContextMenuFactory, IContextMenuInvocation)
+from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue, IContextMenuFactory, IContextMenuInvocation, IParameter)
 from javax.swing import (JPanel, JTable, JButton, JTextField, JLabel, JScrollPane, JMenuItem)
 from javax.swing.table import AbstractTableModel
 from java.awt import (GridBagLayout, GridBagConstraints)
 from array import array
 
-class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory):
+class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IParameter):
     def registerExtenderCallbacks(self, callbacks):
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
@@ -165,7 +165,10 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory):
         return None
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
-        return 0
+        if existingIssue.getIssueDetail() == newIssue.getIssueDetail():
+            return 1
+        else:
+            return 0
 
 
 class SessionAuthPassiveScanIssue(IScanIssue):
@@ -187,6 +190,15 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         self.ident = ident
         self.value = value
         self.foundtype = foundtype
+
+    def __eq__(self, other):
+        return self.param.getType() == other.param.getType() and self.param.getName() == other.param.getName() and self.param.getValue() == other.param.getValue()
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __repr__(self):
+        return "SessionAuthPassiveScanIssue(" + self.getUrl() + "," + self.param.getType() + "," + self.param.getName + "," + self.param.getValue() + ")\n"
 
     def findAll(self, searchIn, searchVal):
         found = list()
@@ -224,8 +236,27 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         elif self.foundtype == self.foundInside:
             return "Tentative"
 
+    def getParamTypeStr(self):
+        paramtype = self.param.getType()
+        if paramtype == IParameter.PARAM_URL:
+            return "URL parameter"
+        elif paramtype == IParameter.PARAM_BODY:
+            return "body parameter"
+        elif paramtype == IParameter.PARAM_COOKIE:
+            return "cookie"
+        elif paramtype == IParameter.PARAM_XML:
+            return "XML parameter"
+        elif paramtype == IParameter.PARAM_XML_ATTR:
+            return "XML attribute parameter"
+        elif paramtype == IParameter.PARAM_MULTIPART_ATTR:
+            return "multipart attribute parameter"
+        elif paramtype == IParameter.PARAM_JSON:
+            return "JSON parameter"
+        else:
+            return "parameter"
+
     def getIssueDetail(self):
-        msg = "The parameter <b>" + self.param.getName() + "</b> contains the user identifier <b>" + self.param.getValue() + "</b>."
+        msg = "The " + self.getParamTypeStr() + " <b>" + self.param.getName() + "</b> contains the user identifier <b>" + self.ident + "</b>."
         if self.foundInResponse:
             msg += "\nThe value <b>" + self.value + "</b> associated with the identifier was found in the response. The request is \
             probably suitable for active scan detection of privilege escalation vulnerabilities."

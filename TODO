@@ -1,3 +1,6 @@
+* BUG: CPU exhaustion when id is added while request is ongoing. This
+   is possibly a Burp bug.
+
 * Multiple values per id
 
 * Generalize extension from recognition of user ids to object ids

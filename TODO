@@ -1,14 +1,15 @@
 * BUG: CPU exhaustion when id is added while request is ongoing. This
    is possibly a Burp bug.
 
+* Send to Intruder with automatic placement of insertion points at
+   locations containing identifiers.
+
 * Multiple values per id
 
 * Generalize extension from recognition of user ids to object ids
    (e.g. documents, downloads etc.). User should be able to define
    multiple object groups. The active scanner module only exchanges
    the found id by ids from the same group.
-
-* Add context menu in request/repsonse views add ids/vals from there
 
 * Case insensitive match of identifiers and values as option
 

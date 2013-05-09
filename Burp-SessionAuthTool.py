@@ -136,7 +136,6 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
             for ident in ids:
                 if value == ident:
                     issues.append(SessionAuthPassiveScanIssue(
-                        baseRequestResponse.getHttpService(),
                         analyzedRequest.getUrl(),
                         baseRequestResponse,
                         param,
@@ -147,7 +146,6 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
                         ))
                 elif value.find(ident) >= 0:
                     issues.append(SessionAuthPassiveScanIssue(
-                        baseRequestResponse.getHttpService(),
                         analyzedRequest.getUrl(),
                         baseRequestResponse,
                         param,
@@ -175,9 +173,9 @@ class SessionAuthPassiveScanIssue(IScanIssue):
     foundEqual = 1                        # parameter value equals identifier
     foundInside = 2                       # identifier was found inside parameter value
 
-    def __init__(self, service, url, httpmsgs, param, ident, value, foundtype, callbacks):
+    def __init__(self, url, httpmsgs, param, ident, value, foundtype, callbacks):
         self.callbacks = callbacks
-        self.service = service
+        self.service = httpmsgs.getHttpService()
         self.findingurl = url
         requestMatch = [array('i', [param.getValueStart(), param.getValueEnd()])]
         responseMatches = self.findAll(httpmsgs.getResponse().tostring(), value)
@@ -190,6 +188,10 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         self.ident = ident
         self.value = value
         self.foundtype = foundtype
+        if self.foundInResponse:
+            self.severity = "Low"
+        else:
+            self.severity = "Information"
 
     def __eq__(self, other):
         return self.param.getType() == other.param.getType() and self.param.getName() == other.param.getName() and self.param.getValue() == other.param.getValue()
@@ -228,7 +230,7 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         return 1
 
     def getSeverity(self):
-        return "Information"
+        return self.severity
 
     def getConfidence(self):
         if self.foundtype == self.foundEqual:

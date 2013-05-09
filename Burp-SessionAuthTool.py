@@ -160,6 +160,50 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
             return None
 
     def doActiveScan(self, baseRequestResponse, insertionPoint):
+        ids = self.tabledata.getIds()
+        if len(ids) <= 1:                 # active check only possible if multiple ids were given
+            return None
+        baseVal = insertionPoint.getBaseValue()
+
+        idFound = list()
+        for ident in ids:                 # find all identifiers in base value
+            if baseVal.find(ident) >= 0:
+                idFound.append(ident)
+        if len(idFound) == 0:             # no given identifier found, nothing to do
+            return None
+
+        baseResponse = baseRequestResponse.getResponse().toString()
+        baseResponseBody = baseResponse[self.helpers.analyzeResponse(baseResponse).getBodyOffset():]
+        issues = list()
+        for replaceId in idFound:         # scanner checks: replace found id by other given ids
+            for scanId in ids:
+                if replaceId == scanId:
+                    continue
+                scanPayload = baseVal.replace(replaceId, scanId)
+                scanRequest = insertionPoint.buildRequest(scanPayload)
+                scanRequestResponse = self.callbacks.makeHttpRequest(baseRequestResponse.getHttpService(), scanRequest)
+                scanResponse = scanRequestResponse.getResponse().toString()
+                scanResponseBody = scanResponse[self.helpers.analyzeResponse(scanResponse).getBodyOffset():]
+
+                if baseResponseBody == scanResponseBody:   # response hasn't changed - no issue
+                    continue
+
+                severity = "Low"          # base values
+                confidence = "Tentative"
+
+                # Analyze responses
+                replaceValue = self.tabledata.getValue(replaceId)
+                scanValue = self.tabledata.getValue(scanId)
+                baseReplaceValueCount = len(baseResponseBody.split(replaceValue)) - 1
+                baseScanValueCount = len(baseResponseBody.split(scanValue)) - 1
+                scanReplaceValueCount = len(scanResponseBody.split(replaceValue)) - 1
+                scanScanValueCount = len(scanResponseBody.split(scanValue)) - 1
+
+                # Case 1: string of replaced id disappears from response and string of scan id appears in it.
+                if baseReplaceValueCount > 0 and baseScanValueCount == 0 and scanReplaceValueCount == 0 and scanScanValueCount > 0:
+                    issues.append(SessionAuthActiveScanIssue(
+                        ))
+
         return None
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
@@ -281,6 +325,13 @@ class SessionAuthPassiveScanIssue(IScanIssue):
 
     def getHttpService(self):
         return self.service
+
+
+class SessionAuthActiveScanIssue(IScanIssue):
+    def __init__(self, url, httpmsgs, param, ident, value, callbacks):
+        self.callbacks = callbacks
+        self.service = httpmsgs.getHttpService()
+        self.findingurl = url
 
 
 class MappingTableModel(AbstractTableModel):

@@ -2,13 +2,13 @@
 # detection of potential privilege escalation issues caused by
 # transmission of user identifiers from the client.
 
-from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue, IContextMenuFactory, IContextMenuInvocation, IParameter)
+from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue, IContextMenuFactory, IContextMenuInvocation, IParameter, IIntruderPayloadGeneratorFactory, IIntruderPayloadGenerator)
 from javax.swing import (JPanel, JTable, JButton, JTextField, JLabel, JScrollPane, JMenuItem)
 from javax.swing.table import AbstractTableModel
 from java.awt import (GridBagLayout, GridBagConstraints)
 from array import array
 
-class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IParameter):
+class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IParameter, IIntruderPayloadGeneratorFactory):
     def registerExtenderCallbacks(self, callbacks):
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
@@ -70,6 +70,7 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
         callbacks.customizeUiComponent(self.input_id)
         callbacks.addSuiteTab(self)
         callbacks.registerScannerCheck(self)
+        callbacks.registerIntruderPayloadGeneratorFactory(self)
         callbacks.registerContextMenuFactory(self)
 
     def btn_add_id(self, e):
@@ -123,6 +124,13 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
         def menu_add_content(e):
             self.tabledata.set_lastadded_content(content)
         return menu_add_content
+
+    ### IIntruderPayloadGeneratorFactory ###
+    def getGeneratorName(self):
+        return "SessionAuth Identifiers"
+
+    def createNewInstance(self, attack):
+        return IdentifiersPayloadGenerator(self.tabledata)
 
     ### IScannerCheck ###
     def doPassiveScan(self, baseRequestResponse):
@@ -281,6 +289,25 @@ class SessionAuthPassiveScanIssue(IScanIssue):
 
     def getHttpService(self):
         return self.service
+
+
+class IdentifiersPayloadGenerator(IIntruderPayloadGenerator):
+    def __init__(self, source):
+        self.ids = source.getIds()
+        self.reset()
+
+    def reset(self):
+        self.workIds = list(self.ids)
+        self.workIds.reverse()
+
+    def hasMorePayloads(self):
+        return len(self.workIds) > 0
+
+    def getNextPayload(self, baseValue):
+        try:
+            return self.workIds.pop()
+        except IndexError:
+            return
 
 
 class MappingTableModel(AbstractTableModel):

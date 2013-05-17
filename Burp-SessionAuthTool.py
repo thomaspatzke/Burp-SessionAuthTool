@@ -2,13 +2,13 @@
 # detection of potential privilege escalation issues caused by
 # transmission of user identifiers from the client.
 
-from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue, IContextMenuFactory, IContextMenuInvocation, IParameter)
+from burp import (IBurpExtender, ITab, IScannerCheck, IScanIssue, IContextMenuFactory, IContextMenuInvocation, IParameter, IIntruderPayloadGeneratorFactory, IIntruderPayloadGenerator)
 from javax.swing import (JPanel, JTable, JButton, JTextField, JLabel, JScrollPane, JMenuItem)
 from javax.swing.table import AbstractTableModel
 from java.awt import (GridBagLayout, GridBagConstraints)
 from array import array
 
-class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IParameter):
+class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IParameter, IIntruderPayloadGeneratorFactory):
     def registerExtenderCallbacks(self, callbacks):
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
@@ -70,6 +70,7 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
         callbacks.customizeUiComponent(self.input_id)
         callbacks.addSuiteTab(self)
         callbacks.registerScannerCheck(self)
+        callbacks.registerIntruderPayloadGeneratorFactory(self)
         callbacks.registerContextMenuFactory(self)
 
     def btn_add_id(self, e):
@@ -93,25 +94,30 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
 
     ### IContextMenuFactory ###
     def createMenuItems(self, invocation):
+        menuitems = list()
         msgs = invocation.getSelectedMessages()
-        if msgs == None or len(msgs) != 1:
-            return None
-        bounds = invocation.getSelectionBounds()
-        if bounds == None or bounds[0] == bounds[1]:
-            return None
+        if msgs != None:
+            if len(msgs) == 1:              # "add as object id/as content to last id" context menu items
+                bounds = invocation.getSelectionBounds()
+                if bounds != None and bounds[0] != bounds[1]:
+                    msg = None
+                    if invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_EDITOR_REQUEST or invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_VIEWER_REQUEST:
+                        msg = msgs[0].getRequest().tostring()
+                    if invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_EDITOR_RESPONSE or invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_VIEWER_RESPONSE:
+                        msg = msgs[0].getResponse().tostring()
+                    if msg != None:
+                        selection = msg[bounds[0]:bounds[1]]
+                        menuitems.append(JMenuItem("Add '" + selection + "' as object id", actionPerformed=self.gen_menu_add_id(selection)))
+                        if self.tabledata.lastadded != None:
+                            menuitems.append(JMenuItem("Add '" + selection + "' as content to last added id", actionPerformed=self.gen_menu_add_content(selection)))
+            if len(msgs) > 0:             # "Send to Intruder" context menu items
+                requestsWithIds = list()
+                for msg in msgs:
+                    if isinstance(msg.getRequest(), array) and self.tabledata.containsId(msg.getRequest().tostring()):
+                        requestsWithIds.append(msg)
+                if len(requestsWithIds) > 0:
+                    menuitems.append(JMenuItem("Send to Intruder and preconfigure id injection points", actionPerformed=self.gen_menu_send_intruder(requestsWithIds)))
 
-        msg = None
-        if invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_EDITOR_REQUEST or invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_VIEWER_REQUEST:
-            msg = msgs[0].getRequest().tostring()
-        if invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_EDITOR_RESPONSE or invocation.getInvocationContext() == IContextMenuInvocation.CONTEXT_MESSAGE_VIEWER_RESPONSE:
-            msg = msgs[0].getResponse().tostring()
-        if msg == None:
-            return None
-
-        selection = msg[bounds[0]:bounds[1]]
-        menuitems = [JMenuItem("Add '" + selection + "' as object id", actionPerformed=self.gen_menu_add_id(selection))]
-        if self.tabledata.lastadded != None:
-            menuitems.append(JMenuItem("Add '" + selection + "' as content to last added id", actionPerformed=self.gen_menu_add_content(selection)))
         return menuitems
 
     def gen_menu_add_id(self, ident):
@@ -123,6 +129,27 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
         def menu_add_content(e):
             self.tabledata.set_lastadded_content(content)
         return menu_add_content
+
+    def gen_menu_send_intruder(self, requestResponses):
+        def menu_send_intruder(e):
+            for requestResponse in requestResponses:
+                httpService = requestResponse.getHttpService()
+                request = requestResponse.getRequest()
+                injectionPoints = list()
+                for ident in self.tabledata.getIds():
+                    newInjectionPoints = findAll(request.tostring(), ident)
+                    if newInjectionPoints != None:
+                        injectionPoints += newInjectionPoints
+                if len(injectionPoints) > 0:
+                    self.callbacks.sendToIntruder(httpService.getHost(), httpService.getPort(), httpService.getProtocol() == "https", request, injectionPoints)
+        return menu_send_intruder
+
+    ### IIntruderPayloadGeneratorFactory ###
+    def getGeneratorName(self):
+        return "SessionAuth Identifiers"
+
+    def createNewInstance(self, attack):
+        return IdentifiersPayloadGenerator(self.tabledata)
 
     ### IScannerCheck ###
     def doPassiveScan(self, baseRequestResponse):
@@ -222,7 +249,7 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         self.service = httpmsgs.getHttpService()
         self.findingurl = url
         requestMatch = [array('i', [param.getValueStart(), param.getValueEnd()])]
-        responseMatches = self.findAll(httpmsgs.getResponse().tostring(), value)
+        responseMatches = findAll(httpmsgs.getResponse().tostring(), value)
         self.httpmsgs = [callbacks.applyMarkers(httpmsgs, requestMatch, responseMatches)]
         if responseMatches:
             self.foundInResponse = True
@@ -233,9 +260,9 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         self.value = value
         self.foundtype = foundtype
         if self.foundInResponse:
-            self.severity = "Low"
+            self.issueSeverity = "Low"
         else:
-            self.severity = "Information"
+            self.issueSeverity = "Information"
 
     def __eq__(self, other):
         return self.param.getType() == other.param.getType() and self.param.getName() == other.param.getName() and self.param.getValue() == other.param.getValue()
@@ -245,24 +272,6 @@ class SessionAuthPassiveScanIssue(IScanIssue):
 
     def __repr__(self):
         return "SessionAuthPassiveScanIssue(" + self.getUrl() + "," + self.param.getType() + "," + self.param.getName + "," + self.param.getValue() + ")\n"
-
-    def findAll(self, searchIn, searchVal):
-        found = list()
-        length = len(searchVal)
-        continueSearch = True
-        offset = 0
-        while continueSearch:
-            pos = searchIn.find(searchVal)
-            if pos >= 0:
-                found.append(array('i', [pos + offset, pos + length + offset]))
-                searchIn = searchIn[pos + length:]
-                offset = offset + pos + length
-            else:
-                continueSearch = False
-        if len(found) > 0:
-            return found
-        else:
-            return None
 
     def getUrl(self):
         return self.findingurl
@@ -274,7 +283,7 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         return 1
 
     def getSeverity(self):
-        return self.severity
+        return self.issueSeverity
 
     def getConfidence(self):
         if self.foundtype == self.foundEqual:
@@ -332,6 +341,25 @@ class SessionAuthActiveScanIssue(IScanIssue):
         self.callbacks = callbacks
         self.service = httpmsgs.getHttpService()
         self.findingurl = url
+
+        
+class IdentifiersPayloadGenerator(IIntruderPayloadGenerator):
+    def __init__(self, source):
+        self.ids = source.getIds()
+        self.reset()
+
+    def reset(self):
+        self.workIds = list(self.ids)
+        self.workIds.reverse()
+
+    def hasMorePayloads(self):
+        return len(self.workIds) > 0
+
+    def getNextPayload(self, baseValue):
+        try:
+            return self.workIds.pop()
+        except IndexError:
+            return
 
 
 class MappingTableModel(AbstractTableModel):
@@ -402,3 +430,32 @@ class MappingTableModel(AbstractTableModel):
 
     def getValue(self, ident):
         return self.mappings[ident]
+
+    def containsId(self, msg):
+        for ident in self.idorder:
+            if msg.find(ident) >= 0:
+                return True
+        return False
+
+### Global Functions ###
+
+# Find all occurrences of a string in a string
+# Input: two strings
+# Output: list of integer arrays (suitable as burp markers)
+def findAll(searchIn, searchVal):
+    found = list()
+    length = len(searchVal)
+    continueSearch = True
+    offset = 0
+    while continueSearch:
+        pos = searchIn.find(searchVal)
+        if pos >= 0:
+            found.append(array('i', [pos + offset, pos + length + offset]))
+            searchIn = searchIn[pos + length:]
+            offset = offset + pos + length
+        else:
+            continueSearch = False
+    if len(found) > 0:
+        return found
+    else:
+        return None

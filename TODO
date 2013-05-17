@@ -1,9 +1,6 @@
 * BUG: CPU exhaustion when id is added while request is ongoing. This
    is possibly a Burp bug.
 
-* Send to Intruder with automatic placement of insertion points at
-   locations containing identifiers.
-
 * Multiple values per id
 
 * Generalize extension from recognition of user ids to object ids

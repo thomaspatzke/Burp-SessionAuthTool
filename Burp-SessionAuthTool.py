@@ -191,6 +191,7 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
         if len(ids) <= 1:                 # active check only possible if multiple ids were given
             return None
         baseVal = insertionPoint.getBaseValue()
+        url = baseRequestResponse.getUrl()
 
         idFound = list()
         for ident in ids:                 # find all identifiers in base value
@@ -199,39 +200,73 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
         if len(idFound) == 0:             # no given identifier found, nothing to do
             return None
 
-        baseResponse = baseRequestResponse.getResponse().toString()
+        baseResponse = baseRequestResponse.getResponse().tostring()
         baseResponseBody = baseResponse[self.helpers.analyzeResponse(baseResponse).getBodyOffset():]
         issues = list()
+        scannedCombos = list()
         for replaceId in idFound:         # scanner checks: replace found id by other given ids
             for scanId in ids:
-                if replaceId == scanId:
+                if replaceId == scanId or set([replaceId, scanId]) in scannedCombos:
                     continue
+                scannedCombos.append(set([replaceId, scanId]))
+
                 scanPayload = baseVal.replace(replaceId, scanId)
                 scanRequest = insertionPoint.buildRequest(scanPayload)
                 scanRequestResponse = self.callbacks.makeHttpRequest(baseRequestResponse.getHttpService(), scanRequest)
-                scanResponse = scanRequestResponse.getResponse().toString()
+                scanResponse = scanRequestResponse.getResponse().tostring()
                 scanResponseBody = scanResponse[self.helpers.analyzeResponse(scanResponse).getBodyOffset():]
 
                 if baseResponseBody == scanResponseBody:   # response hasn't changed - no issue
                     continue
 
-                severity = "Low"          # base values
-                confidence = "Tentative"
-
                 # Analyze responses
                 replaceValue = self.tabledata.getValue(replaceId)
                 scanValue = self.tabledata.getValue(scanId)
+                # naming convention:
+                # first word: base || scan (response)
+                # second word: Replace || Scan (value)
                 baseReplaceValueCount = len(baseResponseBody.split(replaceValue)) - 1
                 baseScanValueCount = len(baseResponseBody.split(scanValue)) - 1
                 scanReplaceValueCount = len(scanResponseBody.split(replaceValue)) - 1
                 scanScanValueCount = len(scanResponseBody.split(scanValue)) - 1
 
-                # Case 1: string of replaced id disappears from response and string of scan id appears in it.
-                if baseReplaceValueCount > 0 and baseScanValueCount == 0 and scanReplaceValueCount == 0 and scanScanValueCount > 0:
-                    issues.append(SessionAuthActiveScanIssue(
-                        ))
+                if scanScanValueCount == 0:
+                    # Scan identifier content value doesn't appears, but responses differ
+                    issueCase = SessionAuthActiveScanIssue.caseScanValueNotFound
+                elif baseReplaceValueCount > 0 and baseScanValueCount == 0 and scanReplaceValueCount == 0 and scanScanValueCount == baseReplaceValueCount:
+                    # Scan identifier replaces all occurrences of the original identifier in the response
+                    issueCase = SessionAuthActiveScanIssue.caseScanValueAppearsExactly
+                elif baseReplaceValueCount > 0 and baseScanValueCount == 0 and scanReplaceValueCount == 0 and scanScanValueCount > 0:
+                    # Scan identfiers value appears, replaced ids value disappears
+                    issueCase = SessionAuthActiveScanIssue.caseScanValueAppearsFuzzy
+                elif baseReplaceValueCount > scanReplaceValueCount and baseScanValueCount < scanScanValueCount:
+                    # Occurence count of replaced id value decreases, scan id value increases
+                    issueCase = SessionAuthActiveScanIssue.caseDecreaseIncrease
+                elif baseScanValueCount < scanScanValueCount:
+                    # Occurence count of scan id value increases
+                    issueCase = SessionAuthActiveScanIssue.caseScanValueIncrease
+                else:
+                    # Remainingg cases
+                    issueCase = SessionAuthActiveScanIssue.caseOther
 
-        return None
+                issues.append(SessionAuthActiveScanIssue(
+                    url,
+                    baseRequestResponse,
+                    insertionPoint,
+                    scanPayload,
+                    scanRequestResponse,
+                    replaceId,
+                    replaceValue,
+                    scanId,
+                    scanValue,
+                    issueCase,
+                    self.callbacks
+                    ))
+
+        if len(issues) > 0:
+            return issues
+        else:
+            return None
 
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         if existingIssue.getIssueDetail() == newIssue.getIssueDetail():
@@ -291,34 +326,16 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         elif self.foundtype == self.foundInside:
             return "Tentative"
 
-    def getParamTypeStr(self):
-        paramtype = self.param.getType()
-        if paramtype == IParameter.PARAM_URL:
-            return "URL parameter"
-        elif paramtype == IParameter.PARAM_BODY:
-            return "body parameter"
-        elif paramtype == IParameter.PARAM_COOKIE:
-            return "cookie"
-        elif paramtype == IParameter.PARAM_XML:
-            return "XML parameter"
-        elif paramtype == IParameter.PARAM_XML_ATTR:
-            return "XML attribute parameter"
-        elif paramtype == IParameter.PARAM_MULTIPART_ATTR:
-            return "multipart attribute parameter"
-        elif paramtype == IParameter.PARAM_JSON:
-            return "JSON parameter"
-        else:
-            return "parameter"
-
     def getIssueDetail(self):
-        msg = "The " + self.getParamTypeStr() + " <b>" + self.param.getName() + "</b> contains the user identifier <b>" + self.ident + "</b>."
+        msg = "The " + getParamTypeStr(self) + " <b>" + self.param.getName() + "</b> contains the user identifier <b>" + self.ident + "</b>."
         if self.foundInResponse:
-            msg += "\nThe value <b>" + self.value + "</b> associated with the identifier was found in the response. The request is \
+            msg += "\nThe value <b>" + self.value + "</b> associated with the identifier was found in the request. The request is \
             probably suitable for active scan detection of privilege escalation vulnerabilities."
         return msg
 
     def getRemediationDetail(self):
-        return None
+        return "A web application should generally perform access control checks to prevent privilege escalation vulnerabilities. The checks must not trust any \
+        data which is sent by the client because it is potentially manipulated. There must not be a static URL which allows to access a protected resource."
 
     def getIssueBackground(self):
         return "User identifiers submitted in requests are potential targets for parameter tampering attacks. An attacker could try to impersonate other users by \
@@ -326,8 +343,9 @@ class SessionAuthPassiveScanIssue(IScanIssue):
         the request."
 
     def getRemediationBackground(self):
-        return "Normally it is not necessary to submit the user identifier in requests to identitfy the user account associated with a session. The user identity should \
-        be stored in session data. There are some legitime cases where user identifiers are submitted in requests, e.g. logins or viewing profiles of other users."
+        return "The reaction to request manipulation and access attempts should be analyzed manually. This scan issue just gives you a pointer for potential interesting \
+        requests. It is important to understand if the replacement of an object identifier in the request gives an unprivileged user access to data he shouldn't be able \
+        to access."
 
     def getHttpMessages(self):
         return self.httpmsgs
@@ -337,12 +355,114 @@ class SessionAuthPassiveScanIssue(IScanIssue):
 
 
 class SessionAuthActiveScanIssue(IScanIssue):
-    def __init__(self, url, httpmsgs, param, ident, value, callbacks):
-        self.callbacks = callbacks
-        self.service = httpmsgs.getHttpService()
-        self.findingurl = url
+    caseOther = 0
+    caseScanValueNotFound = 1
+    caseScanValueAppearsExactly = 2
+    caseScanValueAppearsFuzzy = 3
+    caseDecreaseIncrease = 4
+    caseScanValueIncrease = 5
 
-        
+    def __init__(self, url, baseRequestResponse, insertionPoint, scanPayload, scanRequestResponse, replaceId, replaceValue, scanId, scanValue, issueCase, callbacks):
+        self.callbacks = callbacks
+        self.service = baseRequestResponse.getHttpService()
+        self.findingUrl = url
+        self.insertionPoint = insertionPoint
+        self.scanPayload = scanPayload
+        baseResponseMatches = findAll(baseRequestResponse.getResponse().tostring(), replaceValue)
+        self.baseRequestResponse = callbacks.applyMarkers(baseRequestResponse, None, baseResponseMatches)
+        scanPayloadOffsets = insertionPoint.getPayloadOffsets(scanPayload)
+        scanRequestMatch = None
+        if scanPayloadOffsets != None:
+            scanRequestMatch = [array('i', scanPayloadOffsets)]
+        scanResponseMatches = findAll(scanRequestResponse.getResponse().tostring(), scanValue)
+        self.scanRequestResponse = callbacks.applyMarkers(scanRequestResponse, scanRequestMatch, scanResponseMatches)
+        self.replaceId = replaceId
+        self.replaceValue = replaceValue
+        self.scanId = scanId
+        self.scanValue = scanValue
+        self.issueCase = issueCase
+
+    def getUrl(self):
+        return self.findingUrl
+
+    def getIssueName(self):
+        if self.issueCase in [self.caseScanValueAppearsExactly, self.caseScanValueAppearsFuzzy, self.caseDecreaseIncrease, self.caseScanValueIncrease]:
+            return "Potential Privilege Escalation Vulnerability"
+        else:
+            return "Replacement of Identifier causes different Responses"
+
+    def getIssueType(self):
+        if self.issueCase in [self.caseScanValueAppearsExactly, self.caseScanValueAppearsFuzzy, self.caseDecreaseIncrease, self.caseScanValueIncrease]:
+            return 2
+        else:
+            return 3
+
+    def getSeverity(self):
+        if self.issueCase in [self.caseScanValueAppearsExactly, self.caseScanValueAppearsFuzzy, self.caseDecreaseIncrease, self.caseScanValueIncrease]:
+            return "High"
+        else:
+            return "Information"
+
+    def getConfidence(self):
+        if self.issueCase == self.caseScanValueAppearsExactly:
+            return "Certain"
+        elif self.issueCase in [self.caseScanValueAppearsFuzzy, self.caseDecreaseIncrease]:
+            return "Firm"
+        else:
+            return "Tentative"
+
+    def getIssueDetail(self):
+        msg = "<p>The replaced identifier was <b>" + self.replaceId + "</b> and replaced by <b>" + self.scanId + "</b> in the response. \
+        The response was watched for decreasing occurrences of the content value <b>" + self.replaceValue + "</b> and increasing \
+        occurrences of <b>" + self.scanValue + "</b>."
+        if self.issueCase in [self.caseOther, self.caseScanValueNotFound]:
+            msg += "<p>The replacement of the identifier has caused a different response, but the occurence of the content value never changed \
+            or the content value of the replacement identifier even doesn't appeared. The differences should be verified manually.</p>"
+        elif self.issueCase == self.caseScanValueAppearsExactly:
+            msg += "<p>The content value associated with the replaced identifier disappeared completely. Instead the content value of \
+            the replacement identifier appeared with the same count. This is a quite strong indication of a possible privilege escalation \
+            vulnerability.</p>"
+        elif self.issueCase == self.caseScanValueAppearsFuzzy:
+            msg += "<p>The content value associated with the replaced identifier disappeared completely. Instead the content value of \
+            the replacement identifier appeared with a different count. This is an indication of a possible privilege escalation \
+            vulnerability.</p>"
+        elif self.issueCase == self.caseDecreaseIncrease:
+            msg += "<p>The appearance count of the content value associated with the replaced identifier decreased, while the appearance count of \
+            the replacement identifier increased. This is an indication of a possible privilege escalation vulnerability.</p>"
+        elif self.issueCase == self.caseDecreaseIncrease:
+            msg += "<p>The appearance count of the content value associated with the replaced identifier decreased, while the appearance count of \
+            the replacement identifier increased. This is an indication of a possible privilege escalation vulnerability.</p>"
+        elif self.issueCase == self.caseScanValueIncrease:
+            msg += "<p>The appearance appearance count of the replacement identifier increased. This is an weak indication of a possible privilege \
+            escalation vulnerability.</p>"
+
+        return msg
+
+    def getRemediationDetail(self):
+        return "A web application should generally perform access control checks to prevent privilege escalation vulnerabilities. The checks must not trust any \
+        data which is sent by the client because it is potentially manipulated. There must not be a static URL which allows to access a protected resource."
+
+    def getIssueBackground(self):
+        msg = "The given request/response pair was automatically scanned for privilege escalation vulnerabilities by replacement \
+        of identifiers in the request and comparing the resulting responses. This issue was reported "
+        if self.issueCase in [self.caseScanValueAppearsExactly, self.caseScanValueAppearsFuzzy, self.caseDecreaseIncrease, self.caseScanValueIncrease]:
+            msg += "because the occurrence count of the content values associated with the changed identifiers have changed (see issue details)."
+        else:
+            msg += "for informational purposes because the responses differ. There is no direct indication for a privilege escalation issue."
+        return msg
+
+    def getRemediationBackground(self):
+        return "The reaction to request manipulation and access attempts should be analyzed manually. This scan issue just gives you a pointer for potential interesting \
+        requests. It is important to understand if the replacement of an object identifier in the request gives an unprivileged user access to data he shouldn't be able \
+        to access."
+
+    def getHttpMessages(self):
+        return [self.scanRequestResponse]
+
+    def getHttpService(self):
+        return self.service
+
+
 class IdentifiersPayloadGenerator(IIntruderPayloadGenerator):
     def __init__(self, source):
         self.ids = source.getIds()
@@ -459,3 +579,22 @@ def findAll(searchIn, searchVal):
         return found
     else:
         return None
+
+def getParamTypeStr(scanIssue):
+    paramtype = scanIssue.param.getType()
+    if paramtype == IParameter.PARAM_URL:
+        return "URL parameter"
+    elif paramtype == IParameter.PARAM_BODY:
+        return "body parameter"
+    elif paramtype == IParameter.PARAM_COOKIE:
+        return "cookie"
+    elif paramtype == IParameter.PARAM_XML:
+        return "XML parameter"
+    elif paramtype == IParameter.PARAM_XML_ATTR:
+        return "XML attribute parameter"
+    elif paramtype == IParameter.PARAM_MULTIPART_ATTR:
+        return "multipart attribute parameter"
+    elif paramtype == IParameter.PARAM_JSON:
+        return "JSON parameter"
+    else:
+        return "parameter"

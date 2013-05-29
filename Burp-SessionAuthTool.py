@@ -7,6 +7,7 @@ from javax.swing import (JPanel, JTable, JButton, JTextField, JLabel, JScrollPan
 from javax.swing.table import AbstractTableModel
 from java.awt import (GridBagLayout, GridBagConstraints)
 from array import array
+import pickle
 
 class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IParameter, IIntruderPayloadGeneratorFactory):
     def registerExtenderCallbacks(self, callbacks):
@@ -17,7 +18,7 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
 
         # definition of suite tab
         self.tab = JPanel(GridBagLayout())
-        self.tabledata = MappingTableModel()
+        self.tabledata = MappingTableModel(callbacks)
         self.table = JTable(self.tabledata)
         #self.table.getColumnModel().getColumn(0).setPreferredWidth(50);
         #self.table.getColumnModel().getColumn(1).setPreferredWidth(100);
@@ -483,12 +484,12 @@ class IdentifiersPayloadGenerator(IIntruderPayloadGenerator):
 
 
 class MappingTableModel(AbstractTableModel):
-    def __init__(self):
+    def __init__(self, callbacks):
         AbstractTableModel.__init__(self)
         self.columnnames = ["User/Object Identifier", "Content"]
-        self.mappings = dict()
-        self.idorder = list()
         self.lastadded = None
+        self.callbacks = callbacks
+        self.loadMapping()
 
     def getColumnCount(self):
         return len(self.columnnames)
@@ -520,6 +521,7 @@ class MappingTableModel(AbstractTableModel):
         self.mappings[ident] = content
         self.lastadded = ident
         self.fireTableDataChanged()
+        self.saveMapping()
 
     def set_lastadded_content(self, content):
         self.mappings[self.lastadded] = content
@@ -539,12 +541,14 @@ class MappingTableModel(AbstractTableModel):
                 self.idorder = self.idorder[1:]
             self.fireTableRowsDeleted(row - deleted, row - deleted)
             deleted = deleted + 1
+        self.saveMapping()
 
     def setValueAt(self, val, row, col):
         if col == 1:
             self.mappings[self.idorder[row]] = val
             self.fireTableCellUpdated(row, col)
-
+        self.saveMapping()
+        
     def getIds(self):
         return self.idorder
 
@@ -556,6 +560,27 @@ class MappingTableModel(AbstractTableModel):
             if msg.find(ident) >= 0:
                 return True
         return False
+
+    def saveMapping(self):
+        self.callbacks.saveExtensionSetting("mappings", pickle.dumps(self.mappings))
+        self.callbacks.saveExtensionSetting("idorder", pickle.dumps(self.idorder))
+        self.callbacks.saveExtensionSetting("lastadded", pickle.dumps(self.lastadded))
+
+    def loadMapping(self):
+        try:
+            self.mappings = pickle.loads(self.callbacks.loadExtensionSetting("mappings")) or dict()
+        except:
+            self.mappings = dict()
+
+        try:
+            self.idorder = pickle.loads(self.callbacks.loadExtensionSetting("idorder")) or list()
+        except:
+            self.idorder = list()
+
+        try:
+            self.lastadded = pickle.loads(self.callbacks.loadExtensionSetting("lastadded"))
+        except:
+            self.idorder = None
 
 ### Global Functions ###
 

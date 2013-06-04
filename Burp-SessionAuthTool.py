@@ -499,6 +499,8 @@ class MappingTableModel(AbstractTableModel):
     def __init__(self, callbacks):
         AbstractTableModel.__init__(self)
         self.columnnames = ["User/Object Identifier", "Content"]
+        self.mappings = dict()
+        self.idorder = list()
         self.lastadded = None
         self.callbacks = callbacks
         self.loadMapping()
@@ -579,20 +581,26 @@ class MappingTableModel(AbstractTableModel):
         self.callbacks.saveExtensionSetting("lastadded", pickle.dumps(self.lastadded))
 
     def loadMapping(self):
-        try:
-            self.mappings = pickle.loads(self.callbacks.loadExtensionSetting("mappings")) or dict()
-        except:
-            self.mappings = dict()
+        storedMappings = self.callbacks.loadExtensionSetting("mappings")
+        if isinstance(storedMappings, str):
+            try:
+                self.mappings = pickle.loads(storedMappings) or dict()
+            except:
+                self.mappings = dict()
 
-        try:
-            self.idorder = pickle.loads(self.callbacks.loadExtensionSetting("idorder")) or list()
-        except:
-            self.idorder = list()
+        storedIdorder = self.callbacks.loadExtensionSetting("idorder")
+        if isinstance(storedIdorder, str):
+            try:
+                self.idorder = pickle.loads(storedIdorder) or list()
+            except:
+                self.idorder = list()
 
-        try:
-            self.lastadded = pickle.loads(self.callbacks.loadExtensionSetting("lastadded"))
-        except:
-            self.idorder = None
+        storedLastAdded = self.callbacks.loadExtensionSetting("lastadded")
+        if isinstance(storedLastAdded, str):
+            try:
+                self.lastadded = pickle.loads(storedLastAdded)
+            except:
+                self.lastadded = None
 
 ### Global Functions ###
 

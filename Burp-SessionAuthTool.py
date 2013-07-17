@@ -608,6 +608,8 @@ class MappingTableModel(AbstractTableModel):
 # Input: two strings
 # Output: list of integer arrays (suitable as burp markers)
 def findAll(searchIn, searchVal):
+    if len(searchVal) == 0:
+        return None
     found = list()
     length = len(searchVal)
     continueSearch = True

@@ -120,9 +120,12 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
                         msg = msgs[0].getResponse().tostring()
                     if msg != None:
                         selection = msg[bounds[0]:bounds[1]]
-                        menuitems.append(JMenuItem("Add '" + selection + "' as object id", actionPerformed=self.gen_menu_add_id(selection)))
+                        shortSelection = selection[:20]
+                        if len(selection) > len(shortSelection):
+                            shortSelection += "..."
+                        menuitems.append(JMenuItem("Add '" + shortSelection + "' as object id", actionPerformed=self.gen_menu_add_id(selection)))
                         if self.tabledata.lastadded != None:
-                            menuitems.append(JMenuItem("Add '" + selection + "' as content to last added id", actionPerformed=self.gen_menu_add_content(selection)))
+                            menuitems.append(JMenuItem("Add '" + shortSelection + "' as content to last added id", actionPerformed=self.gen_menu_add_content(selection)))
             if len(msgs) > 0:             # "Send to Intruder" context menu items
                 requestsWithIds = list()
                 for msg in msgs:
@@ -238,10 +241,19 @@ class BurpExtender(IBurpExtender, ITab, IScannerCheck, IContextMenuFactory, IPar
                 # naming convention:
                 # first word: base || scan (response)
                 # second word: Replace || Scan (value)
-                baseReplaceValueCount = len(baseResponseBody.split(replaceValue)) - 1
-                baseScanValueCount = len(baseResponseBody.split(scanValue)) - 1
-                scanReplaceValueCount = len(scanResponseBody.split(replaceValue)) - 1
-                scanScanValueCount = len(scanResponseBody.split(scanValue)) - 1
+                if replaceValue != "":
+                    baseReplaceValueCount = len(baseResponseBody.split(replaceValue)) - 1
+                    scanReplaceValueCount = len(scanResponseBody.split(replaceValue)) - 1
+                else:
+                    baseReplaceValueCount = 0
+                    scanReplaceValueCount = 0
+
+                if scanValue != "":
+                    baseScanValueCount = len(baseResponseBody.split(scanValue)) - 1
+                    scanScanValueCount = len(scanResponseBody.split(scanValue)) - 1
+                else:
+                    baseScanValueCount = 0
+                    scanScanValueCount = 0
 
                 if scanScanValueCount == 0:
                     # Scan identifier content value doesn't appears, but responses differ
@@ -608,7 +620,7 @@ class MappingTableModel(AbstractTableModel):
 # Input: two strings
 # Output: list of integer arrays (suitable as burp markers)
 def findAll(searchIn, searchVal):
-    if len(searchVal) == 0:
+    if searchVal == None or len(searchVal) == 0:
         return None
     found = list()
     length = len(searchVal)

@@ -1,0 +1,10 @@
+Uuid: 9cbdeea2d3744e5ab0f2d08632438985
+ExtensionType: 2
+Name: Session Auth
+ScreenVersion: 1.0
+SerialVersion: 1
+MinPlatformVersion: 0
+ProOnly: True
+Author: Thomas Skora
+ShortDescription: Identifies authentication privilege escalation vulnerabilities.
+EntryPoint: Burp-SessionAuthTool.py

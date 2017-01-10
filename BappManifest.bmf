@@ -5,6 +5,6 @@ ScreenVersion: 1.0
 SerialVersion: 1
 MinPlatformVersion: 0
 ProOnly: True
-Author: Thomas Skora
+Author: Thomas Patzke
 ShortDescription: Identifies authentication privilege escalation vulnerabilities.
 EntryPoint: Burp-SessionAuthTool.py
